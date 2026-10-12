@@ -5,6 +5,7 @@ import { Button, FooterRow, GlyphBadge, Heading, HeaderRow, Helper, IconButton, 
 import { useTheme, MODE_OPTIONS, themeOptions } from '../theme'
 import { describeCron, whenShort, CRON_PRESETS } from '../time'
 import api from '../api'
+import { parseBreakdown, withBreakdown, total as breakdownTotal, problem as breakdownProblem, DEFAULT_ROWS as BREAKDOWN_DEFAULT } from '../breakdown'
 import '../theme.css'
 
 // ── shared bits ──────────────────────────────────────────────────────────────
@@ -182,6 +183,7 @@ export default function Settings() {
   const [trig, setTrig] = useState({})        // action button states
   const [editFor, setEditFor] = useState(null)
   const [modelsOpen, setModelsOpen] = useState(false)
+  const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [efforts, setEfforts] = useState({})  // provider -> reasoning-effort values, from GET /llm/efforts
   const [li, setLi] = useState(null)          // linkedin session status
   const [toast, setToast] = useState(null)
@@ -389,6 +391,7 @@ export default function Settings() {
           { dflt: true, info: 'Only applies to the Claude API provider. If scores look outdated after you edit the rubric, turn this off, run once, then turn it back on.' }),
         E('Scoring rubric', 'The instruction block every scoring call starts from.', 'scoring_rubric', { sub: 'keep placeholders like {job_description} as written; they are filled in when the prompt runs' }),
         E('Light output schema', 'JSON shape for Light runs.', 'scoring_output_light', { sub: 'CV_NAMES_HERE expands to your résumé names' }),
+        { kind: 'breakdown', label: 'Score breakdown', help: 'The categories a Full report is marked out of, and each one’s maximum.' },
         E('Full output schema', 'JSON shape for Full runs.', 'scoring_output_full', { sub: 'CV_NAMES_HERE expands to your résumé names' }),
       ]],
       ['tailoring', '', 'Tailoring', '', [
@@ -593,7 +596,7 @@ export default function Settings() {
                   <span style={{ fontSize: 11.5, lineHeight: '26px', color: 'var(--muted)', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</span>
                 </div>
                 {rows.filter((r) => !(r.hide && r.hide())).map((r) => (
-                  <Row key={r.label} r={r} ctx={{ S, val, isOn, save, info, setInfo, ovr, setOvr, trig, runAction, setEditFor, setModelsOpen, modelsFor, effortsFor, li, setLi, flash, defaults, narrow }} />
+                  <Row key={r.label} r={r} ctx={{ S, val, isOn, save, info, setInfo, ovr, setOvr, trig, runAction, setEditFor, setModelsOpen, setBreakdownOpen, modelsFor, effortsFor, li, setLi, flash, defaults, narrow }} />
                 ))}
               </div>
             ))}
@@ -625,6 +628,7 @@ export default function Settings() {
       </div>
 
       {editFor && <EditModal spec={editFor} S={S} defaults={defaults} onSave={save} onClose={() => setEditFor(null)} />}
+      {breakdownOpen && <BreakdownModal S={S} save={save} onClose={() => setBreakdownOpen(false)} />}
       {modelsOpen && <ModelsModal S={S} save={save} onClose={() => setModelsOpen(false)} />}
       {dialog && (dialog.kind === 'prompt' ? <PromptDialog {...dialog} /> : <ConfirmDialog {...dialog} />)}
     </div>
@@ -633,7 +637,7 @@ export default function Settings() {
 
 // ── one settings row ─────────────────────────────────────────────────────────
 function Row({ r, ctx }) {
-  const { val, isOn, save, info, setInfo, ovr, setOvr, trig, runAction, setEditFor, setModelsOpen, modelsFor, effortsFor, li, setLi, flash, S, narrow } = ctx
+  const { val, isOn, save, info, setInfo, ovr, setOvr, trig, runAction, setEditFor, setModelsOpen, setBreakdownOpen, modelsFor, effortsFor, li, setLi, flash, S, narrow } = ctx
   const infoOpen = r.info && info === r.label
   // An effort is a per-provider value: one the new provider lacks is cleared (the backend would drop it anyway).
   const pickProvider = async (pKey, eKey, v) => {
@@ -718,6 +722,17 @@ function Row({ r, ctx }) {
           <>
             <Helper size="xs" mono style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preview || '—'}</Helper>
             <Pill size="sm" onClick={() => setEditFor(r)} ariaLabel={`Edit ${r.label}`}>Edit</Pill>
+          </>
+        )
+      }
+      case 'breakdown': {
+        const rows = parseBreakdown(S.scoring_output_full)
+        return (
+          <>
+            <Helper size="xs" mono style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {rows.length ? rows.map((x) => `${x.key} ${x.max}`).join(' · ') : '—'}
+            </Helper>
+            <Pill size="sm" onClick={() => setBreakdownOpen(true)} ariaLabel={`Edit ${r.label}`}>Edit</Pill>
           </>
         )
       }
@@ -997,6 +1012,61 @@ function EditModal({ spec, S, defaults, onSave, onClose }) {
           <Button variant="secondary" size="sm" onClick={reset} ariaLabel={`Reset ${spec.label} to default`} style={{ marginLeft: 'auto' }}>Reset to default</Button>
           <Button size="sm" onClick={close} ariaLabel={`Done editing ${spec.label}`}>Done</Button>
         </FooterRow>
+    </ModalPanel>
+  )
+}
+
+// ── score breakdown ──────────────────────────────────────────────────────────
+// Edits the `"breakdown": {...}` line of the Full output schema. Saved on request (not as you type): a
+// half-typed name or maximum would otherwise reach the next scoring call.
+function BreakdownModal({ S, save, onClose }) {
+  const parsed = parseBreakdown(S.scoring_output_full)
+  const [rows, setRows] = useState(() => (parsed.length ? parsed : BREAKDOWN_DEFAULT).map((r) => ({ key: r.key, max: String(r.max) })))
+  const [err, setErr] = useState('')
+  const clean = rows.map((r) => ({ key: r.key.trim(), max: Number(r.max) }))
+  const sum = breakdownTotal(clean)
+  const bad = breakdownProblem(clean)
+  const set = (i, patch) => { setErr(''); setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r))) }
+
+  const commit = async () => {
+    if (bad) { setErr(bad); return }
+    const next = withBreakdown(S.scoring_output_full, clean)
+    if (JSON.stringify(parseBreakdown(next)) !== JSON.stringify(clean)) {
+      setErr('The Full output schema has no "breakdown" line to update — add one by hand under Full output schema first.')
+      return
+    }
+    if (await save('scoring_output_full', next)) onClose()
+  }
+
+  return (
+    <ModalPanel width="min(560px, 94vw)" title="Score breakdown" onClose={onClose} zIndex={60} style={{ maxHeight: '92vh', overflow: 'hidden' }}>
+      <HeaderRow variant="compact" align="center" style={{ gap: 10 }}>
+        <Heading className="v2-dialogtitle">Score breakdown</Heading>
+        <IconButton onClick={onClose} ariaLabel="Close Score breakdown" style={{ marginLeft: 'auto' }}>✕</IconButton>
+      </HeaderRow>
+      <div className="v2-scroll" style={{ flex: 1, overflow: 'auto', padding: '16px 22px', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <Helper>
+          Each category the report shows, and what it is marked out of. Describe every category in the Scoring rubric as well, with the same
+          name, so the model scores it. Reports already scored keep the scale they were scored on.
+        </Helper>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Input value={r.key} onChange={(v) => set(i, { key: v })} mono placeholder="name, e.g. language" ariaLabel={`Category ${i + 1} name`} style={{ flex: 1 }} />
+            <Input value={r.max} onChange={(v) => set(i, { max: v })} type="number" mono width="90px" ariaLabel={`Category ${i + 1} maximum`} style={{ width: 90 }} />
+            <IconButton onClick={() => { setErr(''); setRows((rs) => rs.filter((_, j) => j !== i)) }} ariaLabel={`Remove category ${r.key || i + 1}`}>✕</IconButton>
+          </div>
+        ))}
+        <div><Button variant="secondary" size="sm" onClick={() => { setErr(''); setRows((rs) => [...rs, { key: '', max: '10' }]) }}>Add category</Button></div>
+        <Helper style={{ color: sum === 100 ? 'var(--muted)' : 'var(--warn)' }}>
+          Total {sum}{sum === 100 ? '' : ' — the rubric asks the model for a 0-100 overall score, so the maxima should add up to 100'}
+        </Helper>
+      </div>
+      <FooterRow variant="compact" bg="page" style={{ flex: '0 0 auto' }}>
+        <Helper style={{ color: 'var(--bad)' }}>{err}</Helper>
+        <Button variant="secondary" size="sm" onClick={() => { setErr(''); setRows(BREAKDOWN_DEFAULT.map((r) => ({ key: r.key, max: String(r.max) }))) }} style={{ marginLeft: 'auto' }}>Reset to default</Button>
+        <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+        <Button size="sm" onClick={commit} ariaLabel="Save Score breakdown">Save</Button>
+      </FooterRow>
     </ModalPanel>
   )
 }
