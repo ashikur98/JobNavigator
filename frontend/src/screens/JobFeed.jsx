@@ -72,6 +72,13 @@ const ARRANGEMENT = [
 ]
 const arrangementsOf = (j) => ARRANGEMENT.filter(([key]) => j[`arr_${key}`])
 const ARRANGEMENT_LABEL = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site', unknown: 'Not stated' }
+// The posting's language comes back as an ISO code ("de"); the browser names it. "unknown" is a job
+// whose language could not be told (no description, or too little text).
+const LANG_NAMES = (() => { try { return new Intl.DisplayNames(['en'], { type: 'language' }) } catch { return null } })()
+const langLabel = (code) => {
+  if (code === 'unknown') return 'Not detected'
+  try { return (LANG_NAMES && LANG_NAMES.of(code)) || code } catch { return code }
+}
 
 const BADGE = {
   applied: { label: 'Applied', bd: 'var(--accent)', bg: 'var(--accent-soft)', fg: 'var(--accent)' },
@@ -95,7 +102,7 @@ const SOURCE_LABELS = {
 const srcLabel = (s) => SOURCE_LABELS[s] || s || ''
 const STATUS_OPTS = [['new', 'New'], ['saved', 'Saved'], ['applied', 'Applied'], ['skip', 'Skip'], ['ignored', 'Ignored']]
 const SORT_OPTS = [['score', 'Top score'], ['date', 'Newest first'], ['salary', 'Salary, high to low'], ['company', 'Company A–Z']]
-const DEFAULTS = { status: ['new'], company: [], source: [], h1b_verdict: [], location: [], arrangement: [], min_score: '', min_salary: '', max_salary: '' }
+const DEFAULTS = { status: ['new'], company: [], source: [], h1b_verdict: [], location: [], arrangement: [], language: [], min_score: '', min_salary: '', max_salary: '' }
 
 // small dropdown shell (trigger pill + panel + backdrop). Flips to right-align
 // when the panel would overflow the viewport's right edge.
@@ -236,6 +243,7 @@ export default function V2JobFeed() {
   const [companyList, setCompanyList] = useState([])
   const [locationList, setLocationList] = useState([])   // [{key, name, count, level}] — coarse to fine
   const [arrangementCounts, setArrangementCounts] = useState({})
+  const [languageList, setLanguageList] = useState([])   // [{name, count}] — busiest first, "unknown" last
   const [sourceList, setSourceList] = useState([])
   const [sourceCounts, setSourceCounts] = useState({}); const [verdictCounts, setVerdictCounts] = useState({})
   const [verdictList, setVerdictList] = useState([])
@@ -303,6 +311,7 @@ export default function V2JobFeed() {
     if (filters.h1b_verdict.length) p.h1b_verdict = filters.h1b_verdict.join(',')
     if (filters.location.length) p.location = filters.location.join(',')
     if (filters.arrangement.length) p.arrangement = filters.arrangement.join(',')
+    if (filters.language.length) p.language = filters.language.join(',')
     if (filters.min_score !== '') p.min_score = filters.min_score
     if (filters.min_salary) p.min_salary = Number(filters.min_salary) * 1000
     if (filters.max_salary) p.max_salary = Number(filters.max_salary) * 1000
@@ -323,6 +332,7 @@ export default function V2JobFeed() {
     setCompanyList(named(data.companies))
     setLocationList((data.locations || []).filter((x) => x && x.key))
     setArrangementCounts(Object.fromEntries((data.arrangements || []).map((x) => [x.name, x.count])))
+    setLanguageList(named(data.languages))
     setSourceList(named(data.sources).map((x) => x.name))
     setSourceCounts(Object.fromEntries(named(data.sources).map((x) => [x.name, x.count])))
     setVerdictList(named(data.h1b_verdicts).map((x) => x.name))
@@ -1054,6 +1064,12 @@ export default function V2JobFeed() {
           ))}
           <Helper size="xs" style={{ padding: '6px 8px 2px' }}>A posting offered two ways is counted under both</Helper>
         </Drop>
+        <Drop label={`Language${filters.language.length ? ` · ${filters.language.length}` : ''}`} active={filters.language.length > 0} onClear={() => setF({ language: [] })} open={menu === 'language'} onToggle={() => setMenu(menu === 'language' ? null : 'language')} width={214}>
+          {languageList.length ? languageList.map((l) => (
+            <Check key={l.name} on={filters.language.includes(l.name)} label={langLabel(l.name)} count={l.count} onClick={() => togF('language', l.name)} />
+          )) : <div style={{ padding: 8, fontSize: 12, color: 'var(--muted)' }}>No languages</div>}
+          <Helper size="xs" style={{ padding: '6px 8px 2px' }}>The language the posting is written in, not the country it is in</Helper>
+        </Drop>
         <Drop label={`Location${filters.location.length ? ` · ${filters.location.length}` : ''}`} active={filters.location.length > 0} onClear={() => setF({ location: [] })} open={menu === 'location'} onToggle={() => setMenu(menu === 'location' ? null : 'location')} width={262}>
           <Input autoFocus value={locationQuery} onChange={setLocationQuery} ariaLabel="Search places"
             placeholder={`Type to search ${locationList.length} places…`} style={{ margin: '0 6px 6px', width: 'calc(100% - 12px)', paddingLeft: 12 }} />
@@ -1517,19 +1533,23 @@ export default function V2JobFeed() {
                             {breakdownOpen && (
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '11px 30px' }}>
                                 {Object.entries(rpt.breakdown).filter(([, v]) => typeof v === 'number').map(([label, val]) => {
-                                  const pct = Math.max(0, Math.min(100, Math.round((val / 20) * 100)))
+                                  const top = Number(rpt.breakdown_max?.[label]) || 20   // older reports carry no scale: they were all out of 20
+                                  const pct = Math.max(0, Math.min(100, Math.round((val / top) * 100)))
                                   return (
                                     <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                                       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
                                         <span style={{ fontSize: 12.5, color: 'var(--text-2)', textTransform: 'capitalize' }}>{label}</span>
-                                        {/* ui: keep — serif 15 breakdown numeral and its inline 11px "/20" unit: data display, not a heading or helper */}
-                                        <span style={{ fontFamily: 'var(--serif)', fontSize: 15 }}>{val}<span style={{ fontSize: 11, color: 'var(--muted)' }}>/20</span></span>
+                                        {/* ui: keep — serif 15 breakdown numeral and its inline 11px "/max" unit: data display, not a heading or helper */}
+                                        <span style={{ fontFamily: 'var(--serif)', fontSize: 15 }}>{val}<span style={{ fontSize: 11, color: 'var(--muted)' }}>/{top}</span></span>
                                       </div>
                                       <Meter value={pct / 100} height={1} radius="0" />
                                     </div>
                                   )
                                 })}
                               </div>
+                            )}
+                            {breakdownOpen && rpt.language_evidence && rpt.language_evidence !== 'none stated' && (
+                              <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>Language: “{rpt.language_evidence}”</span>
                             )}
                           </div>
                         )}

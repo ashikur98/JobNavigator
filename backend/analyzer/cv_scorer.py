@@ -3,6 +3,7 @@ from backend.analyzer.prompt_fence import fence
 import asyncio
 import json
 import logging
+import re
 import time
 from backend.analyzer.llm_client import call_llm
 from backend.analyzer.llm_logger import log_llm_call
@@ -16,6 +17,16 @@ logger = logging.getLogger("jobnavigator.cv_scorer")
 # the worker opens its first DB session; this is the same object, re-entrant
 # per task, so a worker already inside the gate is not blocked by its own
 # score_job_sync call.
+
+
+def breakdown_maxima(output_schema: str) -> dict[str, int]:
+    """The scale each score-breakdown category is marked out of, read from the
+    `"breakdown": {"skills": 0-20, ...}` line of the output schema, so the report can show
+    `10/50` instead of assuming every category is out of 20."""
+    block = re.search(r'"breakdown"\s*:\s*\{([^}]*)\}', output_schema or "")
+    if not block:
+        return {}
+    return {key: int(top) for key, top in re.findall(r'"(\w+)"\s*:\s*(?:\d+\s*-\s*)?(\d+)', block.group(1))}
 
 
 def _get_scoring_semaphore():
@@ -414,9 +425,12 @@ async def _score_job_inner(job: Job, cv_texts: dict, db=None, depth="light", pre
         elif depth == "full":
             report = {}
             for key in ["summary", "breakdown", "requirement_mapping", "keyword_coverage_pct",
-                         "matched_keywords", "missing_keywords", "hard_blockers", "ats_tip"]:
+                         "matched_keywords", "missing_keywords", "hard_blockers", "ats_tip",
+                         "language_evidence"]:
                 if key in result:
                     report[key] = result[key]
+            if isinstance(report.get("breakdown"), dict):
+                report["breakdown_max"] = breakdown_maxima(output_schema)
             if report:
                 return_value = {**result, "_scoring_report": report}
             else:
