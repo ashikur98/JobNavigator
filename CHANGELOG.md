@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- **Language filter** on the Jobs feed: every posting gets the language it is written in (`jobs.language`), detected with `langdetect` when the job is stored, so no source needs to know about it. Filter by English, German and the rest; text too short to judge is "Not detected" instead of a guess. Existing jobs: `python -m backend.scripts.backfill_job_language` (dry run) then `--commit`. Rebuild the backend image for the new dependency.
+- **Configurable score breakdown**: Settings > Scoring > Score breakdown edits the categories of a Full report and the maximum of each (it rewrites the `"breakdown"` line of the Full output schema). Reports record the scale they were scored on, so they show `10/50` rather than an assumed `/20`; older reports keep `/20`.
+- **`language_evidence`** in Full reports: the sentence the model based a language score on, shown under the breakdown.
+- **`OLLAMA_BASE_URL`**: point the backend container at an Ollama on the host (`http://host.containers.internal:11434` on Podman, `http://host.docker.internal:11434` on Docker).
 
 ## [2.2.0] — 2026-10-04
 

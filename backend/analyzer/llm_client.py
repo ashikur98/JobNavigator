@@ -748,11 +748,16 @@ async def _call_openai(prompt: str, system: str, model: str, api_key: str, max_t
 
 
 async def _call_ollama(prompt: str, system: str, model: str, max_tokens: int) -> dict:
-    """Call local Ollama instance. Returns {text, usage}."""
+    """Call local Ollama instance. Returns {text, usage}.
+
+    Override with OLLAMA_BASE_URL when the backend is containerized
+    (e.g. http://host.containers.internal:11434 on Podman, http://host.docker.internal:11434 on Docker).
+    """
     import httpx
+    base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(
-            "http://localhost:11434/api/generate",
+            f"{base}/api/generate",
             json={
                 "model": model,
                 "prompt": prompt,
