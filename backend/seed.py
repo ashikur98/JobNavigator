@@ -635,6 +635,8 @@ def run_migrations(db):
         "CREATE INDEX IF NOT EXISTS ix_jobs_arr_remote ON jobs(arr_remote)",
         "CREATE INDEX IF NOT EXISTS ix_jobs_arr_hybrid ON jobs(arr_hybrid)",
         "CREATE INDEX IF NOT EXISTS ix_jobs_arr_onsite ON jobs(arr_onsite)",
+        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS language VARCHAR(8)",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_language ON jobs(language)",
         """CREATE TABLE IF NOT EXISTS job_locations (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

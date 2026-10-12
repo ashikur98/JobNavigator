@@ -180,6 +180,9 @@ class Job(Base):
     # Derived from arr_remote and written with it. Kept because the API exposes
     # `remote` as a filter; never set it on its own.
     remote = Column(Boolean, nullable=True)
+    # Language the posting is written in (ISO 639-1), set by the mapper hook below from
+    # the description. NULL = could not be told (no description, or too little text).
+    language = Column(String(8), nullable=True, index=True)
     salary_min = Column(Integer, nullable=True)
     salary_max = Column(Integer, nullable=True)
     salary_source = Column(String, nullable=True)  # posting | lca_estimate | unknown
@@ -296,6 +299,25 @@ for _col in Job.__table__.columns:
     if isinstance(_col.type, String):
         event.listen(getattr(Job, _col.name), "set", _make_job_field_sanitizer(), retval=True)
 del _col
+
+
+# The posting's language, derived the same way: every source builds a `Job`, so the one
+# place that sees them all is the mapper. Insert detects it; an update re-detects only when
+# the description itself changed (a source that fills it in on a later pass, a re-scrape).
+@event.listens_for(Job, "before_insert")
+def _detect_language_on_insert(mapper, connection, target):
+    if target.language is None:
+        from backend.analyzer.language import detect_job_language
+        target.language = detect_job_language(target.title, target.description)
+
+
+@event.listens_for(Job, "before_update")
+def _detect_language_on_update(mapper, connection, target):
+    from sqlalchemy import inspect as sa_inspect
+    state = sa_inspect(target)
+    if state.attrs.description.history.has_changes() and not state.attrs.language.history.has_changes():
+        from backend.analyzer.language import detect_job_language
+        target.language = detect_job_language(target.title, target.description)
 
 
 # ── Applications ─────────────────────────────────────────────────────────────
